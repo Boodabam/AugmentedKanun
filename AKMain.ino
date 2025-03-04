@@ -1,27 +1,29 @@
 //Code for Augmented Kanun Project
 //Written by Alexandre Bestandji
-//Last update 04/08/2023
+//Last update 03/01/2024 -- Hardware pin swap
+#include <SPI.h>
+#include <SD.h>
 
 
 //HW Sizes
-const int N = 4;
-const int Nbank = 1;
-const int Nmodes = 5;
-float strokeRate = ; //strokeDistance/timeHigh in FaderGraduationUnit per ms //TODO to be measured
+const int N = 27;
+const int Nbank = 5;
+const int Nmodes = 8;
+float strokeRate = 0.5; //strokeDistance/timeHigh in FaderGraduationUnit per ms //TODO to be measured
 
 //Pins
-const int clockPin = ; //Same clock for DMUX 1 and 2
-const int latchPin = ; //Same latch for DMUX 1 and 2
-const int dataPin1 = ; //for DMUX 1 and 2
-const int dataPin2 = ; //for DMUX 3 and 4
-const int pedalPin = ;
-const int writeButtonPin = ;
-const int bankButtonPin = ;
-const int[] motorEnablePins = {,,,,,,,,,,,,,,,,,,,,,,,,,,};
-const int[] analogPins = {,,,};
-const int[] digPinsForAnalog = {,,,,,,,,,,,,};
-const int[] lightPinsMode = {,,,,};
-const int[] lightPinsBank = {,,,}
+const int clockPin = 0; //Same clock for DMUX 1 and 2
+const int latchPin = 1; //Same latch for DMUX 1 and 2
+const int dataPin1 = 2; //for DMUX 1 and 2
+const int dataPin2 = 3 ; //for DMUX 3 and 4
+const int pedalPin = 23;
+const int writeButtonPin = 7;
+const int bankButtonPin = 8;
+const int motorEnablePins[N] = {22,24,26,28,30,32,34,36,38,40,42,44,46,48,27,29,31,33,35,37,39,41,43,45,47,49,25};
+const int analogPins[4] = {A0,A1,A2,A3};
+const int digPinsForAnalog[3] = {4,5,6};
+const int lightPinsMode[Nmodes] = {14,15,16,17,18,19,20,21};
+const int lightPinsBank[Nbank] = {10,9,11,12,13};
 
 //Declare variables
 int upper[N];
@@ -33,11 +35,13 @@ float analogState[N];
 int pedalSave;
 //float matrixModes[Nbank][Nmodes][N]={0};
 int matrixModes[Nbank][Nmodes][N]={0};
-int matrixLights[Nbank][Nmodes]={0};
+bool matrixLights[Nbank][Nmodes]={0};
 int count = 0;
-
+int blinkingLedState = 0;
 
 void setup(){
+  Serial.begin(9600);
+  delay(500);
   //for Timer blinking
   TCCR1A = 0;
   TCCR1B = 0;
@@ -46,31 +50,32 @@ void setup(){
   bitSet(TIMSK1, TOIE1); // timer overflow interrupt
 
   //pinModes
-  for (int i=0; i<N;i++){
-    pinMode(motorEnablePins[i], OUTPUT);
+  if (true){
+    for (int i=0; i<N;i++){
+      pinMode(motorEnablePins[i], OUTPUT);
+    }
+    for (int i=0; i<3;i++){
+      pinMode(digPinsForAnalog[i],OUTPUT);
+    }
+    for (int i=0;i<Nmodes;i++){
+      pinMode(lightPinsMode[i], OUTPUT);
+      digitalWrite(lightPinsMode[bank],LOW);
+    }
+    for (int i=0;i<Nbank;i++){
+      pinMode(lightPinsBank[i], OUTPUT);
+      digitalWrite(lightPinsBank[bank],LOW);
+    }
+    pinMode(clockPin, OUTPUT);
+    pinMode(latchPin, OUTPUT);
+    pinMode(dataPin1, OUTPUT);
+    pinMode(dataPin2, OUTPUT);
+    for (int i=0; i<4;i++){
+      pinMode(analogPins[i], INPUT);
+    }
+    pinMode(writeButtonPin, INPUT);
+    pinMode(bankButtonPin, INPUT);
+    pinMode(pedalPin, INPUT_PULLUP);
   }
-  for (int i=0; i<3;i++){
-    pinMode(digPinsForAnalog[i],OUTPUT);
-  }
-  for (int i=0;i<Nmodes;i++){
-    pinMode(lightPinsMode[i], OUTPUT);
-    digitalWrite(lightPinsMode[bank],LOW);
-  }
-  for (int i=0;i<Nbank;i++){
-    pinMode(lightPinsBank[i], OUTPUT);
-    digitalWrite(lightPinsBank[bank],LOW);
-  }
-  pinMode(clockPin, OUTPUT);
-  pinMode(latchPin, OUTPUT);
-  pinMode(dataPin1, OUTPUT);
-  pinMode(dataPin2, OUTPUT);
-  for (int i=0; i<4;i++){
-    pinMode(analogPins[i], INTPUT);
-  }
-  pinMode(writeButtonPin, INPUT);
-  pinMode(bankButtonPin, INPUT);
-	pinMode(pedalPin, INPUT);
-
   //init
 	state = 0;
 	bank = 0;
@@ -78,6 +83,7 @@ void setup(){
   pedalSave = digitalRead(pedalPin);
 	matrixModes[Nbank][Nmodes][N]={0};
   matrixLights[Nbank][Nmodes]={0};
+  analogReadAllRough();
 }
 
 
@@ -87,6 +93,7 @@ void loop(){
   //If not next mode (active or not)
 	if (digitalRead(pedalPin) != pedalSave){
     pedalSave = digitalRead(pedalPin);
+    delay(20);
     //if current mode is active
     if (matrixLights[bank][state]){
       digitalWrite(lightPinsMode[state],HIGH);
@@ -123,53 +130,55 @@ void loop(){
   // Write button pressed longer => Mode deleted
   // Pedal pressed while write pressed => Next (potentially non-active) mode (and no writing or deleting)
 	if (digitalRead(writeButtonPin)){
-    int writeClearOrPass = 0 ; //0=write, 1=clear, 2+=pass
+    bool pass = 0 ; //0=write, 1=clear, 2+=pass
     count = 1;
     //While write button maintained
     while (digitalRead(writeButtonPin)){
       //if pedal is pressed => move state
       if (digitalRead(pedalPin) != pedalSave){
         pedalSave = digitalRead(pedalPin);
+        delay(20);
         digitalWrite(lightPinsMode[state],matrixLights[bank][state]);
         state = (state +1)%Nmodes;
         //If the next mode is active
         if (matrixLights[bank][state]){
           moveFaders(matrixModes[bank][state]);
         }
-        writeClearOrPass = 2;
+        pass = 1;
       }
-      //After 10 ticks if the pedal havent been pressed => Clear Mode
-      if (count >= 10 and writeClearOrPass == 0){
+      //After 5 ticks if the pedal havent been pressed => Clear Mode
+      if (count >= 5 and pass == 0){
         matrixLights[bank][state]=0;
         digitalWrite(lightPinsMode[state],LOW);
         blinkAll();
-        writeClearOrPass = 1;
+        pass = 1;
       }
     }
     count = 0;
     //write Mode
-    if (writeClearOrPass == 0){
+    if (pass == 0){
+      matrixLights[bank][state]=1;
       //analogReadAll();
       analogReadAllRough();
       writeMode();
       blinkAll();
     }
     
-    //**IfSerialPluggedSaveInFile**
 	}
 }
 
 void serialEvent(){
 	if (Serial.available()>0) {
-		String cal = Serial.readString();
-		if (cal == "calibrate" or cal == "Calibrate"){
+		String str = Serial.readString();
+    //calibration
+		if (str == "calibrate"){
 			Serial.println("Calibration");
 			Serial.println("Ready for lower bound");
 			//wait for pedal
 			while (digitalRead(pedalPin) == pedalSave){}
       pedalSave = digitalRead(pedalPin);
       //write
-      analogReadAllRough(analogRoughState);
+      analogReadAllRough();
 			//lower = analogRoughState;
       memcpy(lower, analogRoughState, N);
 			Serial.println("Lower bound saved");
@@ -177,17 +186,58 @@ void serialEvent(){
 			//wait for pedal
 			while (digitalRead(pedalPin) == pedalSave){}
       pedalSave = digitalRead(pedalPin);
-      analogReadAllRough(analogRoughState)
+      analogReadAllRough();
 			//upper = analogRoughState;
       memcpy(upper, analogRoughState, N);
 			Serial.println("Upper bound saved");
-      Serial.println("Succesfully calibrated")
+      Serial.println("Succesfully calibrated");
 		}
+    //saving
+    if (str.substring(0, 4)=="save"){//TODO change condition for driver control
+      Serial.write(N);
+      for (int i=0;i<Nbank;i++){
+        for (int j=0;j<Nmodes;j++){
+          Serial.write(matrixLights[i][j]);
+          for (int k =0; k<N; k++){
+            //Serial.write(roughToNorm(matrixModes[i][j][k],k));//TODO fix byte serial sending
+            Serial.write(matrixModes[i][j][k]);
+          }
+        }
+      }
+    }
+    //loading
+    if (str.substring(0, 4)=="load"){//TODO change condition for driver control
+      if (Serial.read()!=N){ 
+        Serial.print("Error : Number of strings not matching");
+      }else{
+        for (int i=0;i<Nbank;i++){
+          for (int j=0;j<Nmodes;j++){
+            matrixLights[i][j] = Serial.read();
+            for (int k =0; k<N; k++){
+              matrixModes[i][j][k] = normToRough(Serial.read(),k);
+            }
+          }
+        }
+        //move to bank 0 state 0
+        digitalWrite(lightPinsBank[bank],LOW);
+        bank = 0;
+        state = 0;
+        //Update modes lights
+        for (int i=0; i<Nmodes;i++){
+          digitalWrite(lightPinsMode[i], matrixLights[bank][i]);
+        }
+        digitalWrite(lightPinsBank[bank],HIGH);
+        if(matrixLights[bank][state]){
+          moveFaders(matrixModes[bank][state]);
+        }
+      }
+    }
 	}
 }
 
 ISR(TIMER1_OVF_vect) {
-  digitalWrite(lightPinsModes[state], !digitalRead(lightPinsModes[state]));
+  blinkingLedState = !blinkingLedState;
+  digitalWrite(lightPinsMode[state], blinkingLedState);
   if (count){count++;} //Can improve time complexity by counting locally where needed OR add another timer
 }
 
@@ -221,6 +271,7 @@ void analogReadAllRough(){
   }
 }
 
+
 float roughToNorm(int val, int fad){
   return (val-lower[fad])/(upper[fad]-lower[fad]);
 }
@@ -239,14 +290,14 @@ void analogReadAll(){
 void blinkAll(){
   //Repeat 3 times
   for (int j=0; j<3;j++){
-    //all on
+    //all off
     for (int i=0;i<Nmodes;i++){
       if (matrixLights[bank][i]==1){
         digitalWrite(lightPinsMode[i],LOW);
       }
     }
     delay(100);
-    //all off
+    //all on
     for (int i=0;i<Nmodes;i++){
       if (matrixLights[bank][i]==1){
         digitalWrite(lightPinsMode[i],HIGH);
